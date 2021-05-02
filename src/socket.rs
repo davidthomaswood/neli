@@ -726,12 +726,18 @@ pub mod tokio {
         cx: &mut Context,
         buf: &mut ReadBuf,
     ) -> Poll<io::Result<usize>> {
-        let mut guard = ready!(async_fd.poll_read_ready(cx))?;
-        guard.clear_ready();
-        let socket = async_fd.get_ref();
-        let bytes_read = socket.recv(buf.initialized_mut(), 0)?;
-        buf.advance(bytes_read);
-        Poll::Ready(Ok(bytes_read))
+        loop {
+            let mut guard = ready!(async_fd.poll_read_ready(cx))?;
+
+            match guard.try_io(|fd| {
+                let bytes_read = fd.get_ref().recv(buf.initialized_mut(), 0)?;
+                buf.advance(bytes_read);
+                Ok(bytes_read)
+            }) {
+                Ok(res) => return Poll::Ready(res),
+                Err(_) => continue,
+            }
+        }
     }
 
     fn poll_write_priv(
@@ -739,10 +745,14 @@ pub mod tokio {
         cx: &mut Context,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        let mut guard = ready!(async_fd.poll_write_ready(cx))?;
-        guard.clear_ready();
-        let socket = async_fd.get_ref();
-        Poll::Ready(socket.send(buf, 0))
+        loop {
+            let mut guard = ready!(async_fd.poll_write_ready(cx))?;
+
+            match guard.try_io(|fd| fd.get_ref().send(buf, 0)) {
+                Ok(res) => return Poll::Ready(res),
+                Err(_) => continue,
+            }
+        }
     }
 
     /// Tokio-enabled Netlink socket struct
